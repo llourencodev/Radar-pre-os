@@ -30,7 +30,9 @@
     get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch { /* sem armazenamento */ } },
   };
+  const STATIC = !!window.PRECOS_API; // versão publicada (GitHub Pages): dados em JSON, sem servidor
   async function api(path, opts = {}) {
+    if (STATIC) return window.PRECOS_API(path, opts);
     const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.detail || `Erro ${r.status}`);
@@ -248,7 +250,7 @@
     view.innerHTML = `
       <div class="page-head"><div><div class="eyebrow">Produto monitorado</div><h1>${esc(w.query)}</h1>
         <p>Última busca ${w.last_run ? `${fmtLocal(w.last_run)} (${rel(w.last_run)})` : "em andamento"} · atualiza sozinho a cada ${S.status?.interval_min ?? 30} min</p></div>
-        <div style="display:flex;gap:8px"><button class="btn" id="cfgBtn">Preço alvo e filtros</button><button class="btn btn-primary" id="refBtn" ${w.running ? "disabled" : ""}>${icon("refresh")}<span>${w.running ? "Buscando…" : "Buscar agora"}</span></button></div></div>
+        ${STATIC ? "" : `<div style="display:flex;gap:8px"><button class="btn" id="cfgBtn">Preço alvo e filtros</button><button class="btn btn-primary" id="refBtn" ${w.running ? "disabled" : ""}>${icon("refresh")}<span>${w.running ? "Buscando…" : "Buscar agora"}</span></button></div>`}</div>
       ${storeDots(w.stores, w.running)}
       <div class="hero-price">
         <div class="kpi"><div class="label">Menor preço agora</div><div class="value small">${brl(best?.price)}</div><div class="sub">${best ? `${esc(best.store)} · <a href="${esc(safeUrl(best.url))}" target="_blank" rel="noopener">ver oferta</a>` : "—"}</div></div>
@@ -271,8 +273,8 @@
     $("#fSort").addEventListener("change", (e) => go({ ord: e.target.value === "preco" ? "" : e.target.value }));
     $("#fUsados").addEventListener("change", (e) => go({ usados: e.target.checked ? "1" : "" }));
     $("#fPromo").addEventListener("change", (e) => go({ promo: e.target.checked ? "" : "0" }));
-    $("#refBtn").addEventListener("click", async () => { await api(`/api/watches/${id}/refresh`, { method: "POST" }); toast("Buscando nas lojas…"); pollStatus(true); });
-    $("#cfgBtn").addEventListener("click", () => openConfig(w));
+    $("#refBtn")?.addEventListener("click", async () => { await api(`/api/watches/${id}/refresh`, { method: "POST" }); toast("Buscando nas lojas…"); pollStatus(true); });
+    $("#cfgBtn")?.addEventListener("click", () => openConfig(w));
     bindCommon(view);
   }
 
@@ -320,19 +322,19 @@
     view.innerHTML = `
       <div class="page-head"><div><div class="eyebrow">Descontos</div><h1>Cupons</h1>
         <p>Cupons coletados de Pelando, Cuponomia e Méliuz para as lojas monitoradas, ordenados pela economia estimada numa compra de R$ 1.000.</p></div>
-        <button class="btn btn-primary" id="cpRefresh" ${d.running ? "disabled" : ""}>${icon("refresh")}<span>${d.running ? "Atualizando…" : "Atualizar cupons"}</span></button></div>
+        ${STATIC ? "" : `<button class="btn btn-primary" id="cpRefresh" ${d.running ? "disabled" : ""}>${icon("refresh")}<span>${d.running ? "Atualizando…" : "Atualizar cupons"}</span></button>`}</div>
       <div class="filters">
         <select id="cpStore"><option value="">Todas as lojas</option>${d.stores.map((s) => `<option ${s === lojaSel ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
         <label class="check"><input type="checkbox" id="cpCodes" ${codes ? "checked" : ""}> Só cupons com código</label>
         <span class="grow"></span><span class="hint">${d.runs.length ? `Última atualização ${rel(d.runs.map((r) => r.at).sort().pop())}` : ""}</span>
       </div>
-      ${items.length ? `<div class="grid">${items.map(couponCard).join("")}</div>` : `<div class="empty">${d.running ? "Buscando cupons…" : "Nenhum cupom encontrado. Clique em Atualizar cupons."}</div>`}
+      ${items.length ? `<div class="grid">${items.map(couponCard).join("")}</div>` : `<div class="empty">${d.running ? "Buscando cupons…" : (STATIC ? "Nenhum cupom encontrado na última coleta." : "Nenhum cupom encontrado. Clique em Atualizar cupons.")}</div>`}
       ${d.runs.some((r) => r.status !== "ok") ? `<section class="section" style="margin-top:24px"><div class="section-head"><h2>Situação das fontes de cupons</h2></div><div class="table-wrap"><table><thead><tr><th>Loja</th><th>Situação</th><th>Cupons</th><th>Detalhe</th></tr></thead><tbody>
         ${d.runs.map((r) => `<tr><td>${esc(r.store)}</td><td class="st ${r.status}">${esc(r.status)}</td><td>${r.found}</td><td class="err">${esc(r.error || "")}</td></tr>`).join("")}</tbody></table></div></section>` : ""}`;
     const go = (k, v) => { const p = new URLSearchParams(params); v ? p.set(k, v) : p.delete(k); location.hash = `#/cupons${p.toString() ? "?" + p : ""}`; };
     $("#cpStore").addEventListener("change", (e) => go("loja", e.target.value));
     $("#cpCodes").addEventListener("change", (e) => go("codigo", e.target.checked ? "1" : ""));
-    $("#cpRefresh").addEventListener("click", async () => { await api("/api/coupons/refresh", { method: "POST" }); toast("Atualizando cupons…"); pollStatus(true); router(); });
+    $("#cpRefresh")?.addEventListener("click", async () => { await api("/api/coupons/refresh", { method: "POST" }); toast("Atualizando cupons…"); pollStatus(true); router(); });
     bindCommon(view);
   }
 
@@ -341,7 +343,7 @@
     const st = await api("/api/stores");
     view.innerHTML = `
       <div class="page-head"><div><div class="eyebrow">Diagnóstico</div><h1>Lojas e coleta</h1>
-        <p>Resultado da última consulta em cada loja. Lojas com bloqueio anti-robô podem falhar; desligue-as no arquivo .env (PRECOS_DISABLED_STORES).</p></div></div>
+        <p>Resultado da última consulta em cada loja. ${STATIC ? "Nesta versão publicada a coleta roda nos servidores do GitHub, que algumas lojas bloqueiam mais do que um computador de casa." : "Lojas com bloqueio anti-robô podem falhar; desligue-as no arquivo .env (PRECOS_DISABLED_STORES)."}</p></div></div>
       <div class="table-wrap"><table><thead><tr><th>Loja</th><th>Tipo</th><th>Última consulta</th><th>Situação</th><th>Lidos / relevantes</th><th>Sucesso</th><th>Detalhe</th></tr></thead><tbody>
       ${st.map((s) => `<tr><td><strong>${esc(s.name)}</strong>${s.note ? `<div class="hint">${esc(s.note)}</div>` : ""}</td><td>${esc(s.kind)}</td>
         <td>${s.last ? `${rel(s.last.at)}<div class="hint">${esc(s.last.query)}</div>` : "—"}</td>
@@ -355,12 +357,29 @@
   async function doSearch(q) {
     q = (q || "").trim();
     if (q.length < 2) { $("#searchInput").focus(); return; }
-    const r = await api("/api/search", { method: "POST", body: JSON.stringify({ q }) });
+    let r;
+    try {
+      r = await api("/api/search", { method: "POST", body: JSON.stringify({ q }) });
+    } catch (e) {
+      if (!e.notFound) throw e;
+      return showNewProductHelp(q, e.repo);
+    }
     $("#searchInput").value = "";
+    if (STATIC) { location.hash = `#/p/${r.id}`; return; }
     toast(`Buscando "${q}" nas lojas…`);
     await loadWatches();
     location.hash = `#/p/${r.id}`;
     pollStatus(true);
+  }
+  function showNewProductHelp(q, repo) {
+    const edit = repo ? `https://github.com/${repo}/edit/main/config/produtos.json` : "";
+    $("#modalBody").innerHTML = `<div class="inner"><button class="icon-btn close" id="mClose" aria-label="Fechar">${icon("close")}</button>
+      <h2>"${esc(q)}" ainda não é monitorado</h2>
+      <p style="margin-top:10px">Para monitorar um produto novo, adicione-o em ${edit ? `<a href="${esc(edit)}" target="_blank" rel="noopener noreferrer">config/produtos.json</a>` : "config/produtos.json"} no GitHub, por exemplo:</p>
+      <pre class="mono" style="white-space:pre-wrap;margin-top:8px">{"query": "${esc(q)}", "exclude": "", "target_price": null}</pre>
+      <p class="hint">Ao salvar o arquivo, uma nova coleta roda e o site é publicado de novo em alguns minutos.</p></div>`;
+    $("#modal").showModal();
+    $("#mClose").onclick = () => $("#modal").close();
   }
   async function loadWatches() { S.watches = await api("/api/watches"); renderNav(); }
 
@@ -372,16 +391,17 @@
       const dot = $("#statusDot"), txt = $("#statusText");
       dot.className = "dot " + (st.running ? "running" : st.scheduler_alive ? "ok" : "parado");
       const n = Object.keys(st.watches_running).length;
-      txt.textContent = st.running ? (n ? `Buscando ${n} produto(s)…` : "Atualizando cupons…") : st.auto_update ? `Monitorando a cada ${st.interval_min} min` : "Monitoramento automático desligado";
+      txt.textContent = st.static ? `Atualizado ${rel(st.generated_at)}` : st.running ? (n ? `Buscando ${n} produto(s)…` : "Atualizando cupons…") : st.auto_update ? `Monitorando a cada ${st.interval_min} min` : "Monitoramento automático desligado";
       if (st.running || wasRunning || force) {
         await loadWatches();
         if (!$("#modal").open) router();
       }
       if (wasRunning && !st.running) toast("Busca concluída.");
       wasRunning = st.running;
-      pollTimer = setTimeout(pollStatus, st.running ? 2500 : 30000);
+      if (st.static && st.generated_at !== pollStatus._gen) { pollStatus._gen = st.generated_at; if (!force) { await loadWatches(); if (!$("#modal").open) router(); } }
+      pollTimer = setTimeout(pollStatus, st.static ? 300000 : st.running ? 2500 : 30000);
     } catch {
-      $("#statusDot").className = "dot parado"; $("#statusText").textContent = "Servidor parado";
+      $("#statusDot").className = "dot parado"; $("#statusText").textContent = STATIC ? "Sem conexão" : "Servidor parado";
       pollTimer = setTimeout(pollStatus, 10000);
     }
   }

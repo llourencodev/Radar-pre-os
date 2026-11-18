@@ -23,6 +23,34 @@ comunidades Pelando e Promobit. Depois disso o produto fica monitorado e é cons
 O filtro de relevância só aceita anúncios com todos os termos da busca e descarta variantes (`3060 Ti` quando você buscou
 `3060`), acessórios, PCs completos e notebooks. Palavras extras para excluir podem ser definidas por produto.
 
+## Site no GitHub Pages
+
+O radar também roda sem o seu PC ligado, de graça, no GitHub, do mesmo jeito que o Radar de Notícias:
+
+- O **GitHub Actions** (`.github/workflows/precos.yml`) roda `gerar_site.py` a cada hora. Ele consulta as lojas para os
+  produtos de `config/produtos.json`, atualiza os cupons e gera um site estático na pasta `site/`. O banco
+  (histórico de preços) fica guardado no cache do Actions entre as execuções.
+- O site é publicado no **GitHub Pages** com a mesma interface. Painel, produtos, filtros, histórico, cupons e
+  lojas funcionam no navegador, a partir de `data/precos.json`. Endereço: https://llourencodev.github.io/Radar-pre-os/
+- Se nenhuma oferta for coletada, nada é publicado e o site anterior continua no ar.
+
+**Configuração única:** no repositório, **Settings › Pages › Source: GitHub Actions**. Depois, aba **Actions** ›
+**Coletar preços e publicar o site** › **Run workflow** para a primeira publicação.
+
+**Adicionar ou remover produtos:** edite `config/produtos.json` no GitHub. Cada produto tem `query` (o que buscar),
+`exclude` (palavras para descartar, separadas por vírgula) e `target_price` (preço alvo, ou `null`). Ao salvar, uma
+nova coleta roda e o site é refeito em alguns minutos. Produto removido do arquivo deixa de ser coletado.
+A busca do site publicado só abre produtos que já estão no arquivo.
+
+**Segredos (opcionais):** em **Settings › Secrets and variables › Actions**, crie `TELEGRAM_BOT_TOKEN` e
+`TELEGRAM_CHAT_ID` para receber os avisos e `ML_ACCESS_TOKEN` para o Mercado Livre. Eles nunca aparecem no site
+nem no código. Para desligar lojas na versão online, crie a variável `PRECOS_DISABLED_STORES`.
+
+**Atenção:** as lojas podem bloquear os servidores do GitHub com mais frequência do que bloqueiam um computador de
+casa. A tela **Lojas e coleta** do site mostra o resultado de cada loja na última execução.
+
+Para gerar o site localmente sem coletar: `.venv\Scripts\python.exe gerar_site.py --sem-coleta` (resultado em `site/`).
+
 ## Aviso no Telegram (opcional)
 
 Preencha `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID` no `.env` para receber bug de preço e preço alvo no celular.

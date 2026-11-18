@@ -1,0 +1,99 @@
+name: Coletar preços e publicar o site
+
+on:
+  schedule:
+    - cron: "37 * * * *"       # a cada hora (minuto 37, horário UTC; o Radar de Notícias usa o minuto 7)
+  workflow_dispatch: {}         # botão "Run workflow" na aba Actions
+  push:
+    branches: [main]
+    paths: ["app/**", "config/**", "web/**", "gerar_site.py", "requirements.txt", ".github/workflows/precos.yml"]
+
+# cada job recebe só a permissão de que precisa (o código que lê sites externos roda sem poder de escrita)
+permissions: {}
+
+concurrency:
+  group: precos
+  cancel-in-progress: false
+
+jobs:
+  coletar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    env:
+      TZ: America/Sao_Paulo
+      PRECOS_AUTO_UPDATE: "false"
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      ML_ACCESS_TOKEN: ${{ secrets.ML_ACCESS_TOKEN }}
+      PRECOS_DISABLED_STORES: ${{ vars.PRECOS_DISABLED_STORES || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt pytest
+
+      # o banco SQLite (histórico de preços, ofertas, cupons) fica guardado no cache do Actions entre execuções
+      - name: Recuperar banco da última coleta
+        uses: actions/cache/restore@v4
+        with:
+          path: data/precos.db
+          key: precos-db-${{ github.run_id }}
+          restore-keys: precos-db-
+
+      - name: Testes
+        run: python -m pytest -q
+
+      # se a geração falhar (ou o site sair sem nenhuma oferta), nada é publicado e o site anterior continua no ar
+      - name: Coletar e gerar o site
+        run: python gerar_site.py
+
+      - name: Guardar banco
+        if: always() && hashFiles('data/precos.db') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: data/precos.db
+          key: precos-db-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  publicar:
+    needs: coletar
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+  # apaga cópias antigas do banco (fica só a mais recente) e impede que o GitHub
+  # desligue o agendamento após 60 dias sem commits. Não roda código do repositório.
+  manutencao:
+    needs: coletar
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --key precos-db- --sort created_at --order desc --limit 100 --json id --jq '.[1:][].id' \
+            | xargs -r -n1 gh cache delete --repo "$GITHUB_REPOSITORY" || true
+          gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/precos.yml/enable" || true
