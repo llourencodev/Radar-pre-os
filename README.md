@@ -37,7 +37,21 @@ O radar também roda sem o seu PC ligado, de graça, no GitHub, do mesmo jeito q
 **Configuração única:** no repositório, **Settings › Pages › Source: GitHub Actions**. Depois, aba **Actions** ›
 **Coletar preços e publicar o site** › **Run workflow** para a primeira publicação.
 
-**Adicionar ou remover produtos:** edite `config/produtos.json` no GitHub. Cada produto tem `query` (o que buscar),
+**Buscar qualquer produto pelo site:** digite o produto na busca. Se ele ainda não é monitorado, o site mostra
+o botão **Buscar este produto (abre o GitHub, 1 clique)** e links para olhar na hora em KaBuM!, Pichau, Terabyte,
+Mercado Livre, Amazon, Magalu, Zoom e Google Shopping. O botão abre uma issue já preenchida ("Buscar: produto"):
+é só clicar em **Create**, logado na sua conta. O workflow `.github/workflows/busca.yml` então:
+
+1. confere que a issue foi aberta pelo dono do repositório (issues de outras pessoas são ignoradas);
+2. limpa o título (só letras, números, espaço e `- . + /`, no máximo 80 caracteres) e acrescenta o produto em
+   `config/produtos.json`, com um commit "Monitorar: produto";
+3. comenta na issue, roda a coleta e publica o site (uns 5 minutos);
+4. comenta o menor preço encontrado com o link do produto no site e fecha a issue.
+
+Enquanto isso, o site fica conferindo a cada minuto (por até 10 minutos) e abre a página do produto sozinho quando
+ele aparece.
+
+**Adicionar ou remover produtos à mão:** edite `config/produtos.json` no GitHub. Cada produto tem `query` (o que buscar),
 `exclude` (palavras para descartar, separadas por vírgula) e `target_price` (preço alvo, ou `null`). Ao salvar, uma
 nova coleta roda e o site é refeito em alguns minutos. Produto removido do arquivo deixa de ser coletado.
 A busca do site publicado só abre produtos que já estão no arquivo.

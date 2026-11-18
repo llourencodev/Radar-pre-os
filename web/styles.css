@@ -339,3 +339,9 @@ td.err { color: var(--bad); max-width: 360px; }
 .watch-row td a { color: var(--accent); font-weight: 600; text-decoration: none; }
 .mono { font-variant-numeric: tabular-nums; }
 @media (max-width: 900px) { .hero-price { grid-template-columns: 1fr 1fr; } }
+
+/* busca pedida pelo site publicado */
+.store-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.store-links .ico { width: 14px; height: 14px; }
+.pending-bar { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 60; background: #0369a1; color: #fff;
+  padding: 8px 16px; border-radius: 999px; font-size: 14px; box-shadow: 0 4px 14px rgba(3, 105, 161, .35); max-width: calc(100vw - 32px); }

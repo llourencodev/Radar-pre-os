@@ -1,0 +1,130 @@
+name: Buscar produto pedido pelo site
+
+# O site publicado abre uma issue "Buscar: <produto>". Este workflow cadastra o produto em
+# config/produtos.json, coleta e publica o site, comenta o menor preço e fecha a issue.
+# Só vale para issues abertas pelo dono do repositório.
+on:
+  issues:
+    types: [opened]
+
+permissions: {}
+
+concurrency:
+  group: busca-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  cadastrar:
+    if: github.event.issue.user.login == github.repository_owner && startsWith(github.event.issue.title, 'Buscar:')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      issues: write
+    outputs:
+      query: ${{ steps.add.outputs.query }}
+      added: ${{ steps.add.outputs.added }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # o título é texto não confiável: vai por variável de ambiente e o script só deixa passar
+      # letras, números, espaço e - . + / (no máximo 80 caracteres)
+      - id: add
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: python -m app.busca
+
+      - name: Gravar o produto em config/produtos.json
+        if: steps.add.outputs.added == 'true'
+        env:
+          QUERY: ${{ steps.add.outputs.query }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add config/produtos.json
+          git commit -m "Monitorar: $QUERY"
+          git push origin HEAD:main
+
+      - name: Avisar na issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUERY: ${{ steps.add.outputs.query }}
+          ISSUE: ${{ github.event.issue.number }}
+          SITE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+        run: |
+          gh label create busca --repo "$GITHUB_REPOSITORY" --color 0ea5e9 --description "Busca pedida pelo site" 2>/dev/null || true
+          gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --add-label busca || true
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "Buscando **$QUERY** nas lojas. O site atualiza em uns 5 min: $SITE"
+
+      - name: Título inválido
+        if: failure() && steps.add.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "Não entendi o produto. Use o título no formato: Buscar: nome do produto (letras, números, espaço e - . + /)."
+          gh issue close "$ISSUE" --repo "$GITHUB_REPOSITORY" --reason "not planned"
+
+  # push feito com o GITHUB_TOKEN não dispara outros workflows: a coleta e a publicação são chamadas aqui
+  publicar:
+    needs: cadastrar
+    uses: ./.github/workflows/precos.yml
+    with:
+      ref: main
+    secrets: inherit
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+      actions: write
+
+  responder:
+    needs: [cadastrar, publicar]
+    if: always() && needs.cadastrar.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          QUERY: ${{ needs.cadastrar.outputs.query }}
+          ISSUE: ${{ github.event.issue.number }}
+          PUBLISHED: ${{ needs.publicar.result }}
+          SITE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+        run: |
+          if [ "$PUBLISHED" != "success" ]; then
+            gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "A coleta de **$QUERY** não conseguiu publicar o site. Veja a aba Actions; a próxima coleta automática tenta de novo."
+            exit 0
+          fi
+          # espera o site novo sair no ar e procura o produto (só lê o JSON público do site)
+          MSG=""
+          for i in $(seq 1 20); do
+            MSG=$(curl -fsSL "${SITE}data/precos.json?t=$(date +%s)" | python3 -c '
+          import json, os, sys, unicodedata
+          def k(s):
+              s = unicodedata.normalize("NFKD", s.lower())
+              return " ".join("".join(c for c in s if not unicodedata.combining(c)).split())
+          d = json.load(sys.stdin)
+          q, site = os.environ["QUERY"], os.environ["SITE"]
+          w = next((w for w in d["watches"] if k(w["query"]) == k(q)), None)
+          if not w:
+              sys.exit(1)
+          b = w.get("best")
+          link = site + "#/p/" + str(w["id"])
+          if b:
+              preco = ("R$ {:,.2f}".format(b["price"])).replace(",", "X").replace(".", ",").replace("X", ".")
+              print("Menor preço de **" + q + "**: **" + preco + "** na " + b["store"] + ": " + b["url"]
+                    + "\n\n" + str(w["offers"]) + " oferta(s) no site: " + link)
+          else:
+              print("Nenhuma oferta de **" + q + "** encontrada nas lojas desta vez. O produto continua monitorado de hora em hora: " + link)
+          ') && break
+            sleep 30
+          done
+          [ -n "$MSG" ] || MSG="O site foi publicado, mas o produto **$QUERY** ainda não apareceu nele. Ele continua monitorado de hora em hora: $SITE"
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "$MSG"
+          gh issue close "$ISSUE" --repo "$GITHUB_REPOSITORY" --reason completed

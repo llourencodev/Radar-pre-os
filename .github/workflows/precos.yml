@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "37 * * * *"       # a cada hora (minuto 37, horário UTC; o Radar de Notícias usa o minuto 7)
   workflow_dispatch: {}         # botão "Run workflow" na aba Actions
+  workflow_call:                # chamado pelo busca.yml depois de cadastrar um produto pedido pelo site
+    inputs:
+      ref:
+        description: "Commit ou branch a coletar (vazio = o do evento)"
+        type: string
+        default: ""
   push:
     branches: [main]
     paths: ["app/**", "config/**", "web/**", "gerar_site.py", "requirements.txt", ".github/workflows/precos.yml"]
@@ -32,6 +38,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref || '' }}
 
       - uses: actions/setup-python@v5
         with:

@@ -371,15 +371,86 @@
     location.hash = `#/p/${r.id}`;
     pollStatus(true);
   }
+  // ------------------------------------------------------------ busca de produto novo no site publicado
+  // O site é estático: um produto novo é pedido por uma issue no GitHub ("Buscar: produto"), que dispara
+  // a coleta (.github/workflows/busca.yml). Enquanto isso, links para olhar direto nas lojas.
+  const PENDING = "busca-pendente", PENDING_MAX = 10 * 60 * 1000;
+  const normQ = (s) => String(s || "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+  const slugQ = (q) => normQ(q).replace(/ /g, "-");
+  function storeLinks(q) {
+    const e = encodeURIComponent(q);
+    return [
+      ["KaBuM!", `https://www.kabum.com.br/busca/${slugQ(q)}`],
+      ["Pichau", `https://www.pichau.com.br/search?q=${e}`],
+      ["Terabyte", `https://www.terabyteshop.com.br/busca?str=${e}`],
+      ["Mercado Livre", `https://lista.mercadolivre.com.br/${slugQ(q)}`],
+      ["Amazon", `https://www.amazon.com.br/s?k=${e}`],
+      ["Magalu", `https://www.magazineluiza.com.br/busca/${e}/`],
+      ["Zoom", `https://www.zoom.com.br/search?q=${e}`],
+      ["Google Shopping", `https://www.google.com/search?tbm=shop&q=${e}`],
+    ];
+  }
+  function issueUrl(q, repo) {
+    const body = `Pedido feito pelo site do Radar de Preços.\n\nAo criar esta issue, o GitHub Actions passa a monitorar "${q}", consulta as lojas, publica o site de novo (uns 5 minutos) e responde aqui com o menor preço.`;
+    return `https://github.com/${repo}/issues/new?${new URLSearchParams({ title: `Buscar: ${q}`, labels: "busca", body })}`;
+  }
   function showNewProductHelp(q, repo) {
-    const edit = repo ? `https://github.com/${repo}/edit/main/config/produtos.json` : "";
+    const safeQ = q.replace(/[^\p{L}\p{N} \-.+/]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 80);
     $("#modalBody").innerHTML = `<div class="inner"><button class="icon-btn close" id="mClose" aria-label="Fechar">${icon("close")}</button>
-      <h2>"${esc(q)}" ainda não é monitorado</h2>
-      <p style="margin-top:10px">Para monitorar um produto novo, adicione-o em ${edit ? `<a href="${esc(edit)}" target="_blank" rel="noopener noreferrer">config/produtos.json</a>` : "config/produtos.json"} no GitHub, por exemplo:</p>
-      <pre class="mono" style="white-space:pre-wrap;margin-top:8px">{"query": "${esc(q)}", "exclude": "", "target_price": null}</pre>
-      <p class="hint">Ao salvar o arquivo, uma nova coleta roda e o site é publicado de novo em alguns minutos.</p></div>`;
+      <h2>"${esc(safeQ)}" ainda não é monitorado</h2>
+      <p style="margin-top:10px">O radar busca esse produto em todas as lojas e passa a monitorar o preço. O pedido é feito por uma issue no GitHub: na página que abrir, é só clicar em <strong>Create</strong>.</p>
+      ${repo ? `<p style="margin-top:14px"><button class="btn btn-primary" id="askBtn">${icon("search")}<span>Buscar este produto (abre o GitHub, 1 clique)</span></button></p>` : ""}
+      <p class="hint" id="askState"></p>
+      <h3 style="margin-top:18px">Enquanto isso, olhe direto nas lojas</h3>
+      <div class="store-links">${storeLinks(safeQ).map(([n, u]) => `<a class="btn btn-sm" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(n)} ${icon("external")}</a>`).join("")}</div></div>`;
     $("#modal").showModal();
     $("#mClose").onclick = () => $("#modal").close();
+    $("#askBtn")?.addEventListener("click", () => {
+      window.open(issueUrl(safeQ, repo), "_blank", "noopener");
+      store.set(PENDING, JSON.stringify({ q: safeQ, at: Date.now() }));
+      $("#askState").textContent = "Depois de clicar em Create no GitHub, pode voltar para cá: a página do produto abre sozinha quando a busca terminar (uns 5 minutos).";
+      watchPending();
+    });
+  }
+  function pendingSearch() {
+    try {
+      const p = JSON.parse(store.get(PENDING, "null"));
+      if (p && p.q && Date.now() - p.at < PENDING_MAX) return p;
+    } catch { /* ignorado */ }
+    store.set(PENDING, "");
+    return null;
+  }
+  function pendingBar(text) {
+    let bar = $("#pendingBar");
+    if (!text) { bar?.remove(); return; }
+    if (!bar) { bar = document.createElement("div"); bar.id = "pendingBar"; bar.className = "pending-bar"; document.body.appendChild(bar); }
+    bar.textContent = text;
+  }
+  async function watchPending() {
+    clearTimeout(watchPending._t);
+    const p = pendingSearch();
+    if (!p) { pendingBar(""); return; }
+    try {
+      await api("/api/status");   // recarrega os dados se saiu uma publicação nova
+      await loadWatches();
+    } catch { /* tenta de novo no próximo ciclo */ }
+    const hit = S.watches.find((w) => normQ(w.query) === normQ(p.q));
+    if (hit) {
+      store.set(PENDING, "");
+      pendingBar("");
+      if ($("#modal").open) $("#modal").close();
+      toast(`"${hit.query}" chegou: abrindo a página do produto.`);
+      location.hash = `#/p/${hit.id}`;
+      return;
+    }
+    if (Date.now() - p.at >= PENDING_MAX) {
+      store.set(PENDING, "");
+      pendingBar("");
+      toast(`"${p.q}" ainda não apareceu. A issue no GitHub mostra o andamento; o site atualiza sozinho.`);
+      return;
+    }
+    pendingBar(`Buscando "${p.q}" nas lojas, o site atualiza sozinho…`);
+    watchPending._t = setTimeout(watchPending, 60000);
   }
   async function loadWatches() { S.watches = await api("/api/watches"); renderNav(); }
 
@@ -424,6 +495,7 @@
     $("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") $("#modal").close(); });
     window.addEventListener("hashchange", router);
     await loadWatches().catch(() => {});
+    if (STATIC) watchPending();
     await pollStatus();
     router();
   }
