@@ -1,5 +1,6 @@
 [
   {"query": "RTX 3060 12GB", "exclude": "", "target_price": null},
   {"query": "PS5", "exclude": "", "target_price": null},
-  {"query": "Iphone 18", "exclude": "", "target_price": null}
+  {"query": "Iphone 18", "exclude": "", "target_price": null},
+  {"query": "Monitor portatil", "exclude": "", "target_price": null}
 ]
