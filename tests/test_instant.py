@@ -139,3 +139,13 @@ def test_slot_comes_back_even_if_a_store_hangs(client, monkeypatch):
     stuck.set()
     time.sleep(0.2)
     assert instant._slots._value == config.SEARCH_PARALLEL      # e não devolveu duas vezes
+
+
+def test_no_cache_headers_and_last_update(client):
+    r = client.get("/api/status")
+    assert r.headers["cache-control"] == "no-store"
+    w = db.upsert_watch("RTX 3060 12GB")
+    db.update_watch(w["id"], last_run="2099-01-01T00:00:00+00:00")
+    assert client.get("/api/status").json()["last_update"] == "2099-01-01T00:00:00+00:00"   # coleta mais recente vence
+    assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
+    assert client.get("/").headers["cache-control"] == "no-cache"

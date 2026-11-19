@@ -44,6 +44,18 @@ async def api_mode_guard(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def no_cache(request: Request, call_next):
+    """Os dados mudam a cada coleta: a API nunca vem do cache do navegador, e a interface é sempre conferida."""
+    resp = await call_next(request)
+    path = request.url.path
+    if path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-store"
+    elif path == "/" or path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 # o site publicado (GitHub Pages) chama a busca instantânea de outro endereço
 app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS, allow_methods=["GET"], allow_headers=[],
                    allow_credentials=False, max_age=3600)
@@ -213,7 +225,14 @@ def status():
         "interval_min": config.INTERVAL_MIN,
         "scheduler_alive": collector.State.scheduler_alive,
         "telegram": bool(config.TELEGRAM_TOKEN and config.TELEGRAM_CHAT_ID),
+        # horário da última coleta (produtos ou cupons): a interface recarrega quando ele muda
+        "last_update": last_update(),
     }
+
+
+def last_update() -> str | None:
+    r = db.one("SELECT MAX(at) AS at FROM (SELECT MAX(last_run) AS at FROM watches UNION ALL SELECT MAX(at) FROM coupon_runs)")
+    return r["at"] if r else None
 
 
 @app.get("/api/stores")

@@ -98,7 +98,7 @@
         <div class="badges"><span class="badge store">${esc(o.kind === "promo" ? (o.via || "Loja não informada") : o.store)}</span>${promo}${flagBadges(o)}</div>
         <div class="price-row"><span class="price">${brl(o.price)}</span>${o.old_price ? `<span class="old">${brl(o.old_price)}</span>` : ""}${vsRef(o)}</div>
         <h3><a href="${esc(safeUrl(o.url))}" target="_blank" rel="noopener noreferrer">${esc(o.title)}</a></h3>
-        <div class="meta">${showQuery ? `<span class="outlet">${esc(o.query)}</span>` : ""}${o.seller ? `<span>Vendedor: ${esc(o.seller)}</span>` : ""}${o.kind === "promo" && o.posted_at ? `<span>Postada ${rel(o.posted_at)}</span>` : `<span title="Primeira vez que o radar viu esta oferta">Visto ${rel(o.first_seen)}</span>`}${o.min_price && o.min_price < o.price ? `<span>Menor já visto: ${brl(o.min_price)}</span>` : ""}</div>
+        <div class="meta">${showQuery ? `<span class="outlet">${esc(o.query)}</span>` : ""}${o.seller ? `<span>Vendedor: ${esc(o.seller)}</span>` : ""}${o.kind === "promo" && o.posted_at ? `<span>Postada ${rel(o.posted_at)}</span>` : `<span title="Primeira vez que o radar viu esta oferta: ${esc(fmtLocal(o.first_seen))}">Conferido ${rel(o.last_seen || o.first_seen)}</span>`}${o.min_price && o.min_price < o.price ? `<span>Menor já visto: ${brl(o.min_price)}</span>` : ""}</div>
         ${o.coupon ? `<div>Cupom: <button class="coupon-code" data-copy="${esc(o.coupon)}">${esc(o.coupon)}</button></div>` : ""}
         ${o.installments ? `<div class="note">${esc(o.installments)}</div>` : ""}
         ${o.note ? `<div class="note">${esc(o.note)}</div>` : ""}
@@ -536,12 +536,16 @@
       const dot = $("#statusDot"), txt = $("#statusText");
       dot.className = "dot " + (st.running ? "running" : st.scheduler_alive ? "ok" : "parado");
       const n = Object.keys(st.watches_running).length;
-      txt.textContent = st.static ? `Atualizado ${rel(st.generated_at)}` : st.running ? (n ? `Buscando ${n} produto(s)…` : "Atualizando cupons…") : st.auto_update ? `Monitorando a cada ${st.interval_min} min` : "Monitoramento automático desligado";
-      if (st.running || wasRunning || force) {
+      txt.textContent = st.static ? `Atualizado ${rel(st.generated_at)}` : st.running ? (n ? `Buscando ${n} produto(s)…` : "Atualizando cupons…") : `${st.auto_update ? "Monitorando" : "Monitoramento automático desligado"}${st.last_update ? ` · atualizado ${rel(st.last_update)}` : ""}`;
+      $("#statusBox").title = st.last_update ? `Última coleta: ${fmtLocal(st.last_update)}` : "Situação da coleta";
+      // coleta automática que terminou entre duas consultas: a página também precisa recarregar
+      const changed = !st.static && pollStatus._last !== undefined && st.last_update !== pollStatus._last;
+      pollStatus._last = st.last_update;
+      if (st.running || wasRunning || force || changed) {
         await loadWatches();
         if (!$("#modal").open) router();
       }
-      if (wasRunning && !st.running) toast("Busca concluída.");
+      if ((wasRunning || changed) && !st.running) toast("Preços atualizados.");
       wasRunning = st.running;
       if (st.static && st.generated_at !== pollStatus._gen) { pollStatus._gen = st.generated_at; if (!force) { await loadWatches(); if (!$("#modal").open) router(); } }
       pollTimer = setTimeout(pollStatus, st.static ? 300000 : st.running ? 2500 : 30000);
