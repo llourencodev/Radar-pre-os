@@ -50,13 +50,18 @@ app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS, allow_meth
 
 
 def client_ip(request: Request) -> str:
-    """IP de quem buscou. Atrás do proxy do Render (Cloudflare) vale o cabeçalho que o próprio proxy preenche;
-    o primeiro item do X-Forwarded-For pode ser inventado pelo cliente, então usamos o último."""
-    h = request.headers
-    ip = h.get("cf-connecting-ip") or h.get("true-client-ip")
-    if not ip and config.API_MODE and h.get("x-forwarded-for"):
-        ip = h["x-forwarded-for"].split(",")[-1].strip()
-    return ip or (request.client.host if request.client else "?")
+    """IP de quem buscou, para o limite por IP.
+
+    Fora do modo api, só vale o endereço da conexão (nenhum cabeçalho é confiável). No modo api o serviço fica
+    atrás do proxy do Render, que acrescenta o IP real de quem conectou ao FINAL do X-Forwarded-For; os itens
+    anteriores podem ter sido inventados pelo cliente, então só o último é usado. Outros cabeçalhos de IP
+    (True-Client-IP, CF-Connecting-IP) são ignorados porque o cliente também pode enviá-los."""
+    if config.API_MODE:
+        xff = request.headers.get("x-forwarded-for", "")
+        last = xff.split(",")[-1].strip() if xff else ""
+        if last:
+            return last
+    return request.client.host if request.client else "?"
 
 
 @app.get("/api/saude")

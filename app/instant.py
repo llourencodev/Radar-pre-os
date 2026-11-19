@@ -45,10 +45,17 @@ class RateLimiter:
 
 
 limiter = RateLimiter(config.SEARCH_RATE_PER_MIN)
+global_limiter = RateLimiter(config.SEARCH_RATE_GLOBAL)   # teto para o servidor todo, além do limite por IP
 _cache: dict[str, tuple[float, dict]] = {}
 _cache_lock = threading.Lock()
-_key_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
+_CACHE_MAX = 500
+# travas por termo em número fixo (o mesmo termo cai sempre na mesma trava; a memória não cresce)
+_key_locks = [threading.Lock() for _ in range(64)]
+# vagas de busca: uma vaga só é devolvida quando TODAS as lojas daquela busca terminaram (mesmo as que
+# passaram do tempo e ficaram de fora da resposta), então lojas lentas não acumulam threads sem limite
 _slots = threading.BoundedSemaphore(config.SEARCH_PARALLEL)
+# um único conjunto de threads para todas as buscas instantâneas
+_pool = ThreadPoolExecutor(max_workers=max(4, config.SEARCH_PARALLEL * 16), thread_name_prefix="busca")
 _coupons_started = 0.0
 
 
@@ -70,20 +77,22 @@ def search(q: str) -> dict:
     hit = _cached(key)
     if hit:
         return hit
-    with _key_locks[key]:                # duas pessoas buscando o mesmo termo: uma consulta só
+    with _key_locks[hash(key) % len(_key_locks)]:   # duas pessoas buscando o mesmo termo: uma consulta só
         hit = _cached(key)
         if hit:
             return hit
+        if not global_limiter.allow("*"):
+            raise SearchError(429, "Muitas buscas no servidor agora. Tente de novo em um minuto.")
         if not _slots.acquire(timeout=config.SEARCH_TIMEOUT):
             raise SearchError(503, "O servidor está ocupado com outras buscas. Tente de novo em instantes.")
-        try:
-            res = _run(q)
-        finally:
-            _slots.release()
+        res = _run(q)   # _run devolve a vaga quando a última loja terminar
         with _cache_lock:
-            _cache[key] = (time.monotonic(), res)
-            for k in [k for k, (t, _) in _cache.items() if time.monotonic() - t > config.SEARCH_CACHE_MIN * 60]:
+            now = time.monotonic()
+            _cache[key] = (now, res)
+            for k in [k for k, (t, _) in _cache.items() if now - t > config.SEARCH_CACHE_MIN * 60]:
                 del _cache[k]
+            while len(_cache) > _CACHE_MAX:
+                del _cache[min(_cache, key=lambda k: _cache[k][0])]
         return {**res, "cached": False}
 
 
@@ -96,12 +105,33 @@ def _cached(key: str) -> dict | None:
 
 
 def _run(q: str) -> dict:
-    stores = collector.enabled_stores()
+    """Roda a busca em todas as lojas. Precisa ser chamada com uma vaga de _slots: devolve a vaga sozinha."""
+    try:
+        stores = collector.enabled_stores()
+    except Exception:
+        _slots.release()
+        raise
     t0 = time.monotonic()
-    ex = ThreadPoolExecutor(max_workers=max(1, min(len(stores), config.WORKERS + 4)), thread_name_prefix="busca")
-    futs = {ex.submit(collector._one_store, sid, name, fn, q, []): name for sid, name, fn, _k, _n in stores}
-    done, _pending = wait(futs, timeout=config.SEARCH_TIMEOUT)
-    ex.shutdown(wait=False, cancel_futures=True)   # lojas lentas ficam de fora; as threads terminam sozinhas
+    if not stores:
+        _slots.release()
+        futs = {}
+    else:
+        left = [len(stores)]
+        left_lock = threading.Lock()
+
+        def finished(_f):
+            with left_lock:
+                left[0] -= 1
+                last = left[0] == 0
+            if last:
+                _slots.release()
+
+        futs = {}
+        for sid, name, fn, _k, _n in stores:
+            f = _pool.submit(collector._one_store, sid, name, fn, q, [])
+            futs[f] = name
+            f.add_done_callback(finished)
+    done, _pending = wait(futs, timeout=config.SEARCH_TIMEOUT)   # lojas lentas ficam de fora da resposta
 
     now = db.now()
     offers, status = [], []

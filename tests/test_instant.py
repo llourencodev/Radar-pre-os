@@ -96,3 +96,39 @@ def test_api_mode_exposes_only_search(client, monkeypatch):
     assert client.get("/api/watches").status_code == 404
     assert client.post("/api/search", json={"q": "ps5"}).status_code == 404
     assert client.get("/").status_code == 404
+
+
+def _slots_free(timeout=5.0):
+    end = time.monotonic() + timeout
+    while instant._slots._value < config.SEARCH_PARALLEL and time.monotonic() < end:
+        time.sleep(0.1)
+    return instant._slots._value == config.SEARCH_PARALLEL
+
+
+def test_slot_held_until_slow_store_finishes(client):
+    assert _slots_free()   # lojas lentas de testes anteriores já terminaram
+    assert client.get("/api/buscar", params={"q": "monitor portatil"}).status_code == 200
+    # a loja lenta (3 s) ainda está rodando: uma das 2 vagas continua ocupada
+    assert instant._slots._value == config.SEARCH_PARALLEL - 1
+    assert _slots_free()
+
+
+def test_client_ip_ignores_spoofable_headers(client, monkeypatch):
+    from starlette.requests import Request
+
+    def req(headers):
+        return Request({"type": "http", "headers": [(k.encode(), v.encode()) for k, v in headers.items()],
+                        "client": ("10.0.0.9", 1234)})
+    spoof = {"x-forwarded-for": "1.1.1.1, 203.0.113.7", "true-client-ip": "9.9.9.9", "cf-connecting-ip": "8.8.8.8"}
+    assert server.client_ip(req(spoof)) == "10.0.0.9"           # modo local: só a conexão
+    monkeypatch.setattr(config, "API_MODE", True)
+    assert server.client_ip(req(spoof)) == "203.0.113.7"        # Render: o último item, posto pelo proxy
+    assert server.client_ip(req({})) == "10.0.0.9"
+
+
+def test_global_limit(client, monkeypatch):
+    monkeypatch.setattr(instant, "global_limiter", instant.RateLimiter(1))
+    assert client.get("/api/buscar", params={"q": "monitor portatil"}).status_code == 200
+    time.sleep(3)  # libera a vaga da loja lenta
+    r = client.get("/api/buscar", params={"q": "monitor 15 portatil"})
+    assert r.status_code == 429
