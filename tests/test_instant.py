@@ -1,4 +1,5 @@
 """Busca instantânea (/api/buscar): relevância, selos, cache, limite por IP, tempo esgotado, CORS e modo api."""
+import threading
 import time
 
 import pytest
@@ -126,9 +127,15 @@ def test_client_ip_ignores_spoofable_headers(client, monkeypatch):
     assert server.client_ip(req({})) == "10.0.0.9"
 
 
-def test_global_limit(client, monkeypatch):
-    monkeypatch.setattr(instant, "global_limiter", instant.RateLimiter(1))
-    assert client.get("/api/buscar", params={"q": "monitor portatil"}).status_code == 200
-    time.sleep(3)  # libera a vaga da loja lenta
-    r = client.get("/api/buscar", params={"q": "monitor 15 portatil"})
-    assert r.status_code == 429
+
+def test_slot_comes_back_even_if_a_store_hangs(client, monkeypatch):
+    assert _slots_free()
+    stuck = threading.Event()
+    hang = ("trava", "Trava", lambda q: stuck.wait(10) or [], "loja", "")
+    monkeypatch.setattr(collector, "enabled_stores", lambda: [hang])
+    assert client.get("/api/buscar", params={"q": "monitor travado"}).status_code == 200
+    assert instant._slots._value == config.SEARCH_PARALLEL - 1
+    assert _slots_free(timeout=config.SEARCH_TIMEOUT * 3 + 2)   # a trava de segurança devolveu a vaga
+    stuck.set()
+    time.sleep(0.2)
+    assert instant._slots._value == config.SEARCH_PARALLEL      # e não devolveu duas vezes

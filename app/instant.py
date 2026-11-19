@@ -4,6 +4,7 @@ Usada pelo site publicado (GitHub Pages) através da API no Render (PRECOS_MODE=
 O endereço é público, então há proteção básica contra abuso: termo de 2 a 80 caracteres, limite de buscas por IP,
 cache de 10 minutos por termo e no máximo SEARCH_PARALLEL buscas rodando ao mesmo tempo.
 """
+import logging
 import threading
 import time
 from collections import defaultdict, deque
@@ -12,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 
 from . import collector, config, coupons, db
 from .matching import norm
+
+log = logging.getLogger(__name__)
 
 
 class SearchError(Exception):
@@ -45,7 +48,6 @@ class RateLimiter:
 
 
 limiter = RateLimiter(config.SEARCH_RATE_PER_MIN)
-global_limiter = RateLimiter(config.SEARCH_RATE_GLOBAL)   # teto para o servidor todo, além do limite por IP
 _cache: dict[str, tuple[float, dict]] = {}
 _cache_lock = threading.Lock()
 _CACHE_MAX = 500
@@ -81,8 +83,6 @@ def search(q: str) -> dict:
         hit = _cached(key)
         if hit:
             return hit
-        if not global_limiter.allow("*"):
-            raise SearchError(429, "Muitas buscas no servidor agora. Tente de novo em um minuto.")
         if not _slots.acquire(timeout=config.SEARCH_TIMEOUT):
             raise SearchError(503, "O servidor está ocupado com outras buscas. Tente de novo em instantes.")
         res = _run(q)   # _run devolve a vaga quando a última loja terminar
@@ -116,15 +116,30 @@ def _run(q: str) -> dict:
         _slots.release()
         futs = {}
     else:
-        left = [len(stores)]
+        left = [len(stores), False]          # [lojas ainda rodando, vaga já devolvida]
         left_lock = threading.Lock()
+
+        def give_back(reason: str | None = None):
+            with left_lock:
+                if left[1]:
+                    return
+                left[1] = True
+            if reason:
+                log.warning("Busca '%s': vaga devolvida por %s (%s loja(s) ainda rodando)", q, reason, left[0])
+            _slots.release()
 
         def finished(_f):
             with left_lock:
                 left[0] -= 1
                 last = left[0] == 0
             if last:
-                _slots.release()
+                give_back()
+
+        # trava de segurança: mesmo que uma loja trave, a vaga volta depois de 3x o tempo da busca
+        # (as threads do conjunto compartilhado são limitadas, então uma loja presa não multiplica threads)
+        guard = threading.Timer(config.SEARCH_TIMEOUT * 3, give_back, args=("tempo limite",))
+        guard.daemon = True
+        guard.start()
 
         futs = {}
         for sid, name, fn, _k, _n in stores:

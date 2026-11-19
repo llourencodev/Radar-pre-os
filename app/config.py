@@ -68,7 +68,6 @@ SEARCH_TIMEOUT = _int("PRECOS_SEARCH_TIMEOUT", 30)        # segundos; lojas mais
 SEARCH_CACHE_MIN = _int("PRECOS_SEARCH_CACHE_MIN", 10)    # cache por termo
 SEARCH_RATE_PER_MIN = _int("PRECOS_SEARCH_RATE", 10)      # buscas por minuto por IP
 SEARCH_PARALLEL = _int("PRECOS_SEARCH_PARALLEL", 2)       # buscas rodando ao mesmo tempo
-SEARCH_RATE_GLOBAL = _int("PRECOS_SEARCH_RATE_GLOBAL", 60) # buscas novas por minuto no servidor todo (cache não conta)
 CORS_ORIGINS = [o.strip() for o in os.environ.get(
     "PRECOS_CORS_ORIGINS", "https://llourencodev.github.io,http://localhost:8010").split(",") if o.strip()]
 
