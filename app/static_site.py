@@ -5,6 +5,7 @@ no navegador às rotas /api/... a partir deles. Nada privado é exportado: nem .
 """
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -15,6 +16,19 @@ from . import main as api
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' https: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'")
 HISTORY_POINTS = int(os.environ.get("PRECOS_SITE_HISTORY", "120"))  # pontos de histórico por oferta no site
+SITE_CONFIG = config.BASE_DIR / "config" / "site.json"
+_API_URL = re.compile(r"https://[a-z0-9.-]+(:\d+)?|http://(localhost|127\.0\.0\.1)(:\d+)?")
+
+
+def search_api_url() -> str:
+    """Endereço da API de busca instantânea (PRECOS_API_URL ou config/site.json). Vazio = sem busca instantânea."""
+    url = os.environ.get("PRECOS_API_URL")
+    if url is None and SITE_CONFIG.exists():
+        url = json.loads(SITE_CONFIG.read_text(encoding="utf-8")).get("api_url", "")
+    url = (url or "").strip().rstrip("/")
+    if url and not _API_URL.fullmatch(url):
+        raise ValueError(f"api_url inválida em config/site.json: {url!r} (use https://... ou http://localhost:porta)")
+    return url
 
 
 def export(out_dir: Path, watch_ids: list[int] | None = None, interval_min: int = 60) -> dict:
@@ -31,8 +45,10 @@ def export(out_dir: Path, watch_ids: list[int] | None = None, interval_min: int 
     html = html.replace('href="/static/styles.css"', 'href="styles.css"')
     html = html.replace('<script src="/static/app.js"></script>',
                         '<script src="static-api.js"></script>\n<script src="app.js"></script>')
+    search_url = search_api_url()
+    csp = CSP.replace("connect-src 'self'", f"connect-src 'self' {search_url}") if search_url else CSP
     html = html.replace('<meta charset="utf-8">',
-                        f'<meta charset="utf-8">\n  <meta http-equiv="Content-Security-Policy" content="{CSP}">\n'
+                        f'<meta charset="utf-8">\n  <meta http-equiv="Content-Security-Policy" content="{csp}">\n'
                         '  <meta name="referrer" content="no-referrer">', 1)
     if "static-api.js" not in html or "Content-Security-Policy" not in html or 'href="styles.css"' not in html:
         raise RuntimeError("web/index.html mudou: não foi possível adaptar a página para a versão estática")
@@ -64,7 +80,8 @@ def export(out_dir: Path, watch_ids: list[int] | None = None, interval_min: int 
     dash["status"] = status
     coupons = api.list_coupons(None, False)
     coupons["running"] = False
-    meta = {"repo": os.environ.get("GITHUB_REPOSITORY", ""), "generated_at": generated, "interval_min": interval_min}
+    meta = {"repo": os.environ.get("GITHUB_REPOSITORY", ""), "generated_at": generated, "interval_min": interval_min,
+            "api_url": search_url}
 
     data = {"generated_at": generated, "meta": meta, "status": status, "dashboard": dash, "watches": watches,
             "details": details, "coupons": coupons, "stores": api.stores()}

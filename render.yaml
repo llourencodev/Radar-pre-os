@@ -1,0 +1,20 @@
+# Blueprint do Render (https://render.com): API pública de busca instantânea usada pelo site do GitHub Pages.
+# Plano gratuito: o serviço dorme após 15 min sem uso e a primeira busca depois disso leva ~1 min.
+services:
+  - type: web
+    name: radar-precos-api
+    runtime: python
+    plan: free
+    region: virginia            # a mais próxima do Brasil entre as regiões do Render
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/saude
+    autoDeploy: true
+    envVars:
+      - key: PRECOS_MODE
+        value: api
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: PRECOS_CORS_ORIGINS
+        value: https://llourencodev.github.io

@@ -184,6 +184,24 @@ def _ref_base(offers: list[dict]) -> list[float]:
             and not (o["store"] or "").startswith(REF_EXCLUDED_STORES)]
 
 
+def incoherent(query: str, offers: list[dict], exclude: list[str] | None = None) -> set[int]:
+    """Índices das ofertas que não passam no filtro (vale para o banco e para a busca instantânea em memória).
+
+    1) o título precisa passar no filtro de relevância (termos inteiros, sem cara de acessório);
+    2) coerência de preço: abaixo de 20% da referência só fica se o título casar muito bem
+       (e nunca abaixo de 5%, que é preço simbólico: R$ 0,01, "R$ 300 de desconto"...).
+    """
+    drop = {i for i, o in enumerate(offers) if not relevance(query, o["title"] or "", exclude)[0] or o["price"] < 5}
+    kept = [o for i, o in enumerate(offers) if i not in drop]
+    ref = reference_price(_ref_base(kept))
+    if ref:
+        for i, o in enumerate(offers):
+            if i not in drop and o["price"] < ref * config.FLOOR_RATIO and (
+                    o["price"] < ref * 0.05 or not strict_match(query, o["title"] or "")):
+                drop.add(i)
+    return drop
+
+
 def prune_offers(wid: int) -> int:
     """Reavalia as ofertas ativas com o filtro atual e desativa as que não passam. Devolve quantas saíram.
 
@@ -196,15 +214,7 @@ def prune_offers(wid: int) -> int:
         return 0
     exclude = [x.strip() for x in (w.get("exclude") or "").split(",") if x.strip()]
     offers = rows("SELECT id, store, title, price, kind, condition FROM offers WHERE watch_id=? AND active=1", (wid,))
-    drop = {o["id"] for o in offers if not relevance(w["query"], o["title"] or "", exclude)[0]}
-    kept = [o for o in offers if o["id"] not in drop]
-    drop |= {o["id"] for o in kept if o["price"] < 5}  # preço simbólico (R$ 0,01 de "cupom", "R$ 300 de desconto")
-    kept = [o for o in kept if o["id"] not in drop]
-    ref = reference_price(_ref_base(kept))
-    if ref:
-        for o in kept:
-            if o["price"] < ref * config.FLOOR_RATIO and (o["price"] < ref * 0.05 or not strict_match(w["query"], o["title"] or "")):
-                drop.add(o["id"])
+    drop = {offers[i]["id"] for i in incoherent(w["query"], offers, exclude)}
     if drop:
         with _lock:
             conn().execute(f"UPDATE offers SET active=0 WHERE id IN ({','.join('?' * len(drop))})", tuple(drop))
@@ -220,6 +230,12 @@ def annotated_offers(w: dict, include_inactive: bool = False) -> list[dict]:
     """Ofertas com as marcações: bug de preço, abaixo da média, nova, queda, menor histórico."""
     offers = rows("SELECT * FROM offers WHERE watch_id=?" + ("" if include_inactive else " AND active=1") + " ORDER BY price",
                   (w["id"],))
+    return annotate(offers, w.get("target_price"))
+
+
+def annotate(offers: list[dict], target_price: float | None = None) -> list[dict]:
+    """Calcula a referência e as marcações de uma lista de ofertas (do banco ou da busca instantânea em memória).
+    Campos usados: price, old_price, store, kind, condition, posted_at, note, first_seen, first_run, prev_price."""
     ref = reference_price(_ref_base(offers))
     new_since = (datetime.now(timezone.utc) - timedelta(hours=config.NEW_HOURS)).isoformat()
     for o in offers:
@@ -248,13 +264,13 @@ def annotated_offers(w: dict, include_inactive: bool = False) -> list[dict]:
                 f.append("bug")
             elif r <= config.DEAL_RATIO:
                 f.append("abaixo")
-        if o["first_seen"] >= new_since and not o["first_run"]:
+        if (o.get("first_seen") or "") >= new_since and not o.get("first_run"):
             f.append("nova")
-        if o["prev_price"] and o["price"] < o["prev_price"] * 0.98:
+        if o.get("prev_price") and o["price"] < o["prev_price"] * 0.98:
             f.append("queda")
         if o["old_price"] and o["old_price"] > o["price"] * 1.4:
             f.append("desconto_alto")
-        if w.get("target_price") and o["price"] <= w["target_price"]:
+        if target_price and o["price"] <= target_price:
             f.append("alvo")
         if o["condition"] == "usado":
             f.append("usado")

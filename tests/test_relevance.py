@@ -91,3 +91,22 @@ def test_playstation_alias():
 def test_plural_and_vr():
     assert not relevance("PS5", "Tampas do console PlayStation 5 Slim - Midnight Black")[0]
     assert not relevance("PS5", "Sony PlayStation VR2 PS VR2 OLED 120fps")[0]
+
+
+@pytest.mark.parametrize("title,ok", [
+    ("Monitor Portátil 15.6 Full HD USB-C", True),
+    ("Monitor LED Portátil 15,6 polegadas", True),
+    ("Monitor 15.6 Portátil Zeus", True),
+    ("Monitor Fetal Doppler Portátil Digital", False),
+    ("Monitor Pressão Arterial Pulso Omron Digital Portátil", False),
+])
+def test_query_words_must_be_close(title, ok):
+    assert relevance("monitor portatil", title)[0] is ok, title
+
+
+def test_numbers_and_specs_can_be_far():
+    assert relevance("RTX 3060 12GB", "Placa de Vídeo RTX 3060 Twin Edge OC Zotac Gaming, 12GB GDDR6")[0]
+
+
+def test_health_monitors_are_other_products():
+    assert not relevance("monitor portatil", "Monitor Portátil De Frequência Cardíaca Alta Tecnologia")[0]

@@ -61,3 +61,21 @@ def test_export_has_no_secrets_or_local_paths(setup):
         assert secret not in text, secret
     data = json.loads((tmp / "site" / "data" / "precos.json").read_text(encoding="utf-8"))
     assert data["status"]["telegram"] is False
+
+
+def test_export_includes_search_api_in_csp_and_meta(setup, monkeypatch):
+    w, _other, tmp = setup
+    monkeypatch.setenv("PRECOS_API_URL", "https://radar-precos-api.onrender.com/")
+    static_site.export(tmp / "site", [w["id"]], 60)
+    html = (tmp / "site" / "index.html").read_text(encoding="utf-8")
+    assert "connect-src 'self' https://radar-precos-api.onrender.com;" in html
+    data = json.loads((tmp / "site" / "data" / "precos.json").read_text(encoding="utf-8"))
+    assert data["meta"]["api_url"] == "https://radar-precos-api.onrender.com"
+
+
+@pytest.mark.parametrize("url", ["http://evil.example", "javascript:alert(1)", "https://x.com/a b", "https://x.com'; script-src *"])
+def test_export_rejects_bad_api_url(setup, monkeypatch, url):
+    w, _other, tmp = setup
+    monkeypatch.setenv("PRECOS_API_URL", url)
+    with pytest.raises(ValueError):
+        static_site.export(tmp / "site", [w["id"]], 60)

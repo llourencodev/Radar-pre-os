@@ -104,7 +104,7 @@
         ${o.note ? `<div class="note">${esc(o.note)}</div>` : ""}
       </div>
       <div class="card-foot">
-        <button class="linkbtn" data-hist="${o.id}" data-title="${esc(o.title)}">Histórico de preço</button>
+        ${o.id > 0 ? `<button class="linkbtn" data-hist="${o.id}" data-title="${esc(o.title)}">Histórico de preço</button>` : "<span></span>"}
         <a href="${esc(safeUrl(o.url))}" target="_blank" rel="noopener noreferrer">${o.kind === "promo" ? "Ver promoção" : "Ver na loja"} ${icon("external")}</a>
       </div>
     </article>`;
@@ -184,6 +184,7 @@
       else if (path.startsWith("p/")) await viewWatch(view, +path.slice(2), params);
       else if (path === "cupons") await viewCoupons(view, params);
       else if (path === "lojas") await viewStores(view);
+      else if (path === "busca") await viewBusca(view, params);
       else location.hash = "#/";
     } catch (e) {
       view.innerHTML = `<div class="empty">Não foi possível carregar: ${esc(e.message)}</div>`;
@@ -362,7 +363,9 @@
       r = await api("/api/search", { method: "POST", body: JSON.stringify({ q }) });
     } catch (e) {
       if (!e.notFound) throw e;
-      return showNewProductHelp(q, e.repo);
+      $("#searchInput").value = "";
+      location.hash = `#/busca?${new URLSearchParams({ q })}`;
+      return;
     }
     $("#searchInput").value = "";
     if (STATIC) { location.hash = `#/p/${r.id}`; return; }
@@ -394,23 +397,94 @@
     const body = `Pedido feito pelo site do Radar de Preços.\n\nAo criar esta issue, o GitHub Actions passa a monitorar "${q}", consulta as lojas, publica o site de novo (uns 5 minutos) e responde aqui com o menor preço.`;
     return `https://github.com/${repo}/issues/new?${new URLSearchParams({ title: `Buscar: ${q}`, labels: "busca", body })}`;
   }
-  function showNewProductHelp(q, repo) {
-    const safeQ = q.replace(/[^\p{L}\p{N} \-.+/]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 80);
-    $("#modalBody").innerHTML = `<div class="inner"><button class="icon-btn close" id="mClose" aria-label="Fechar">${icon("close")}</button>
-      <h2>"${esc(safeQ)}" ainda não é monitorado</h2>
-      <p style="margin-top:10px">O radar busca esse produto em todas as lojas e passa a monitorar o preço. O pedido é feito por uma issue no GitHub: na página que abrir, é só clicar em <strong>Create</strong>.</p>
-      ${repo ? `<p style="margin-top:14px"><button class="btn btn-primary" id="askBtn">${icon("search")}<span>Buscar este produto (abre o GitHub, 1 clique)</span></button></p>` : ""}
-      <p class="hint" id="askState"></p>
-      <h3 style="margin-top:18px">Enquanto isso, olhe direto nas lojas</h3>
-      <div class="store-links">${storeLinks(safeQ).map(([n, u]) => `<a class="btn btn-sm" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(n)} ${icon("external")}</a>`).join("")}</div></div>`;
-    $("#modal").showModal();
-    $("#mClose").onclick = () => $("#modal").close();
-    $("#askBtn")?.addEventListener("click", () => {
-      window.open(issueUrl(safeQ, repo), "_blank", "noopener");
-      store.set(PENDING, JSON.stringify({ q: safeQ, at: Date.now() }));
-      $("#askState").textContent = "Depois de clicar em Create no GitHub, pode voltar para cá: a página do produto abre sozinha quando a busca terminar (uns 5 minutos).";
-      watchPending();
-    });
+  // ------------------------------------------------------------ busca instantânea (qualquer produto, na hora)
+  const BUSCA = new Map();   // resultados já recebidos nesta aba (trocar filtros não busca de novo)
+  async function fetchBusca(base, q) {
+    if (BUSCA.has(q)) return BUSCA.get(q);
+    const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), 90000);
+    try {
+      const r = await fetch(`${base}/api/buscar?${new URLSearchParams({ q })}`, { signal: ctrl.signal, cache: "no-store" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `Erro ${r.status}`);
+      BUSCA.set(q, data);
+      return data;
+    } catch (e) {
+      throw new Error(e.name === "AbortError" ? "O servidor de busca não respondeu a tempo." : e.message === "Failed to fetch" ? "O servidor de busca não está disponível." : e.message);
+    } finally { clearTimeout(t); }
+  }
+  function storeLinksHtml(q) {
+    return `<div class="store-links">${storeLinks(q).map(([n, u]) => `<a class="btn btn-sm" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(n)} ${icon("external")}</a>`).join("")}</div>`;
+  }
+  function askMonitor(q, repo) {
+    if (!STATIC) {
+      return api("/api/search", { method: "POST", body: JSON.stringify({ q }) }).then(async (r) => {
+        toast(`"${q}" agora é monitorado.`); await loadWatches(); location.hash = `#/p/${r.id}`; pollStatus(true);
+      });
+    }
+    window.open(issueUrl(q, repo), "_blank", "noopener");
+    store.set(PENDING, JSON.stringify({ q, at: Date.now() }));
+    toast("Na aba do GitHub, clique em Create. O produto entra no site em uns 5 minutos.");
+    watchPending();
+  }
+  async function viewBusca(view, params) {
+    const q = (params.get("q") || "").replace(/[^\p{L}\p{N} \-.+/]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+    if (q.length < 2) { location.hash = "#/"; return; }
+    const F = { store: params.get("loja") || "", flag: params.get("f") || "" };
+    const meta = STATIC ? await api("/api/meta") : { api_url: "", repo: "" };
+    const base = STATIC ? meta.api_url : "";
+    const n = (viewBusca._n = (viewBusca._n || 0) + 1);
+    const head = (sub, extra = "") => `<div class="page-head"><div><div class="eyebrow">Busca instantânea</div><h1>${esc(q)}</h1><p>${sub}</p></div>${extra}</div>`;
+    const monitorBtn = STATIC && !meta.repo ? "" : `<button class="btn" id="monBtn">${icon("bolt")}<span>Monitorar este produto (histórico e alertas)</span></button>`;
+    if (STATIC && !base) return buscaFallback(view, q, meta.repo, "A busca instantânea ainda não foi configurada neste site.", head, monitorBtn);
+    if (!BUSCA.has(q)) {
+      view.innerHTML = head("Consultando as lojas agora") + `<div class="empty"><div class="skeleton" style="height:6px;margin-bottom:14px"></div>
+        <p><strong>Buscando nas lojas…</strong> ${STATIC ? "a primeira busca do dia pode levar até 1 minuto (o servidor gratuito acorda)." : "leva até 30 segundos."}</p>
+        <p class="hint" style="margin-top:10px">Enquanto isso, olhe direto nas lojas:</p>${storeLinksHtml(q)}</div>`;
+      hydrateIcons(view);
+    }
+    let d;
+    try {
+      d = await fetchBusca(base, q);
+    } catch (e) {
+      if (n === viewBusca._n) buscaFallback(view, q, meta.repo, e.message, head, monitorBtn);
+      return;
+    }
+    if (n !== viewBusca._n) return;   // o usuário já foi para outra página
+    let items = d.items.filter((o) => !F.store || o.store === F.store || o.via === F.store);
+    if (F.flag) items = items.filter((o) => o.flags.includes(F.flag));
+    const count = (f) => d.items.filter((o) => o.flags.includes(f)).length;
+    const link = (patch) => { const p = new URLSearchParams(params); Object.entries(patch).forEach(([k, v]) => (v === "" || v == null ? p.delete(k) : p.set(k, v))); return `#/busca?${p}`; };
+    const chip = (f, label) => `<a class="period ${F.flag === f ? "on" : ""}" href="${link({ f })}"><span>${label}</span></a>`;
+    const runs = Object.fromEntries(d.stores.map((s) => [s.store, s]));
+    const stores = d.stores.map((s) => s.store).sort((a, b) => a.localeCompare(b, "pt-BR"));
+    const label = (s) => { const r = runs[s], c = d.items.filter((o) => o.store === s || o.via === s).length; return !c && r && r.status !== "ok" && r.status !== "vazio" ? `${s} (${r.status})` : `${s} (${c})`; };
+    const best = d.best;
+    view.innerHTML = head(`Consultado ${rel(d.generated_at)} em ${d.stores.length} lojas${d.seconds ? ` (${String(d.seconds).replace(".", ",")} s)` : ""}. Os preços não ficam guardados: para ter histórico e alertas, monitore o produto.`,
+      monitorBtn ? `<div style="display:flex;gap:8px">${monitorBtn}</div>` : "") + `
+      ${storeDots(d.stores)}
+      <div class="hero-price">
+        <div class="kpi"><div class="label">Menor preço agora</div><div class="value small">${brl(best?.price)}</div><div class="sub">${best ? `${esc(best.store)} · <a href="${esc(safeUrl(best.url))}" target="_blank" rel="noopener">ver oferta</a>` : "—"}</div></div>
+        <div class="kpi"><div class="label">Preço de referência</div><div class="value small">${brl(d.ref_price)}</div><div class="sub">Mediana das lojas (novos)</div></div>
+        <div class="kpi"><div class="label">Possíveis bugs</div><div class="value small" style="color:${d.bugs ? "var(--bad)" : "inherit"}">${d.bugs}</div><div class="sub">${d.bugaos ? `${d.bugaos} bugão(ões)` : "Abaixo de 70% da referência"}</div></div>
+      </div>
+      <div class="filters">
+        <div class="periods"><span class="periods-label">Mostrar</span>${chip("", `Todas (${d.items.length})`)}${count("bugao") ? chip("bugao", `Bugões (${count("bugao")})`) : ""}${chip("bug", `Bugs de preço (${count("bug")})`)}${chip("abaixo", `Abaixo da média (${count("abaixo")})`)}${chip("suspeito", `Suspeitas (${count("suspeito")})`)}</div>
+        <select id="fStore"><option value="">Todas as lojas</option>${stores.map((s) => `<option value="${esc(s)}" ${s === F.store ? "selected" : ""}>${esc(label(s))}</option>`).join("")}</select>
+      </div>
+      <p class="results-info">${items.length} oferta(s)</p>
+      ${items.length ? `<div class="grid">${items.map((o) => offerCard(o)).join("")}</div>` : `<div class="empty">Nenhuma oferta encontrada${F.store || F.flag ? " com esses filtros" : ""}. Olhe direto nas lojas:${storeLinksHtml(q)}</div>`}
+      ${d.coupons?.length ? `<section class="section" style="margin-top:28px"><div class="section-head"><h2>Cupons para estas lojas</h2><a href="#/cupons">Todos os cupons</a></div><div class="grid">${d.coupons.map(couponCard).join("")}</div></section>` : ""}`;
+    $("#fStore").addEventListener("change", (e) => { location.hash = link({ loja: e.target.value }); });
+    $("#monBtn")?.addEventListener("click", () => askMonitor(q, meta.repo));
+    bindCommon(view);
+  }
+  function buscaFallback(view, q, repo, reason, head, monitorBtn) {
+    view.innerHTML = head("A busca na hora não funcionou desta vez", monitorBtn ? `<div style="display:flex;gap:8px">${monitorBtn}</div>` : "") + `
+      <div class="empty"><p>${esc(reason)}</p>
+      <p style="margin-top:10px">Olhe direto nas lojas, com a busca já preenchida:</p>${storeLinksHtml(q)}
+      ${monitorBtn ? `<p class="hint" style="margin-top:14px">Ou clique em <strong>Monitorar este produto</strong>: o radar passa a buscá-lo de hora em hora e guarda o histórico.</p>` : ""}</div>`;
+    hydrateIcons(view);
+    $("#monBtn")?.addEventListener("click", () => askMonitor(q, repo));
   }
   function pendingSearch() {
     try {

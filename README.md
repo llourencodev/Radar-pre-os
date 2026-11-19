@@ -37,10 +37,9 @@ O radar também roda sem o seu PC ligado, de graça, no GitHub, do mesmo jeito q
 **Configuração única:** no repositório, **Settings › Pages › Source: GitHub Actions**. Depois, aba **Actions** ›
 **Coletar preços e publicar o site** › **Run workflow** para a primeira publicação.
 
-**Buscar qualquer produto pelo site:** digite o produto na busca. Se ele ainda não é monitorado, o site mostra
-o botão **Buscar este produto (abre o GitHub, 1 clique)** e links para olhar na hora em KaBuM!, Pichau, Terabyte,
-Mercado Livre, Amazon, Magalu, Zoom e Google Shopping. O botão abre uma issue já preenchida ("Buscar: produto"):
-é só clicar em **Create**, logado na sua conta. O workflow `.github/workflows/busca.yml` então:
+**Monitorar um produto novo pelo site:** na página de busca instantânea (veja abaixo), o botão **Monitorar este
+produto (histórico e alertas)** abre uma issue já preenchida ("Buscar: produto"): é só clicar em **Create**, logado
+na sua conta. O workflow `.github/workflows/busca.yml` então:
 
 1. confere que a issue foi aberta pelo dono do repositório (issues de outras pessoas são ignoradas);
 2. limpa o título (só letras, números, espaço e `- . + /`, no máximo 80 caracteres) e acrescenta o produto em
@@ -54,7 +53,6 @@ ele aparece.
 **Adicionar ou remover produtos à mão:** edite `config/produtos.json` no GitHub. Cada produto tem `query` (o que buscar),
 `exclude` (palavras para descartar, separadas por vírgula) e `target_price` (preço alvo, ou `null`). Ao salvar, uma
 nova coleta roda e o site é refeito em alguns minutos. Produto removido do arquivo deixa de ser coletado.
-A busca do site publicado só abre produtos que já estão no arquivo.
 
 **Segredos (opcionais):** em **Settings › Secrets and variables › Actions**, crie `TELEGRAM_BOT_TOKEN` e
 `TELEGRAM_CHAT_ID` para receber os avisos e `ML_ACCESS_TOKEN` para o Mercado Livre. Eles nunca aparecem no site
@@ -64,6 +62,36 @@ nem no código. Para desligar lojas na versão online, crie a variável `PRECOS_
 casa. A tela **Lojas e coleta** do site mostra o resultado de cada loja na última execução.
 
 Para gerar o site localmente sem coletar: `.venv\Scripts\python.exe gerar_site.py --sem-coleta` (resultado em `site/`).
+
+## Busca instantânea no site
+
+O site do GitHub Pages é estático, então a busca de um produto que não é monitorado usa uma pequena API gratuita
+no [Render](https://render.com). Ela consulta as lojas na hora (até 30 segundos), aplica o mesmo filtro e os mesmos
+selos (bug, BUGÃO, abaixo da média, suspeito) e devolve o resultado para o site. Produtos já monitorados continuam
+abrindo a página deles, com histórico.
+
+**Como ligar (uma vez, uns 5 minutos):**
+
+1. Crie uma conta em https://render.com clicando em **Sign in with GitHub** (use a sua conta do GitHub).
+2. Abra https://render.com/deploy?repo=https://github.com/llourencodev/Radar-pre-os e clique em **Connect** /
+   autorize o Render a ler o repositório, se ele pedir.
+3. O Render mostra o Blueprint lido do `render.yaml`, com o serviço **radar-precos-api** no plano **Free**. Clique em
+   **Deploy Blueprint** (ou **Apply**). Não precisa de cartão para o plano gratuito.
+4. Espere o deploy terminar (uns 3 minutos) e copie a URL do serviço, que aparece no topo da página dele
+   (normalmente `https://radar-precos-api.onrender.com`). Para conferir, abra `URL/api/saude`: deve mostrar `{"ok":true,...}`.
+5. Se a URL for diferente, troque `api_url` em `config/site.json` no GitHub; o site é refeito sozinho.
+
+**Limitações do plano grátis:**
+
+- O serviço dorme depois de 15 minutos sem uso. A primeira busca depois disso leva até 1 minuto (o site avisa).
+- As lojas podem bloquear servidores em nuvem. Pelos servidores do GitHub funcionam hoje KaBuM!, Zoom, Promobit,
+  AliExpress e Amazon; o Render pode ter um resultado diferente. A página de busca mostra a situação de cada loja.
+- Proteção contra abuso, porque o endereço é público: termo de 2 a 80 caracteres, 10 buscas por minuto por IP,
+  cache de 10 minutos por termo, duas buscas ao mesmo tempo e acesso liberado só para o site
+  (https://llourencodev.github.io). No modo `PRECOS_MODE=api` o servidor só responde `/api/buscar` e `/api/saude`.
+- Os resultados da busca instantânea não ficam guardados. Para ter histórico e alertas, use **Monitorar este produto**.
+
+O servidor local (`iniciar.bat`) também responde `/api/buscar`: http://localhost:8010/api/buscar?q=monitor+portatil
 
 ## Aviso no Telegram (opcional)
 

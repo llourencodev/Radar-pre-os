@@ -1,4 +1,5 @@
 """Normalização de textos e preços e filtro de relevância (o anúncio é mesmo o produto buscado?)."""
+import itertools
 import re
 import statistics
 import unicodedata
@@ -20,6 +21,9 @@ ACCESSORY_WORDS = [
     "caixa vazia", "somente caixa", "so a caixa", "só a caixa", "manual", "defeito", "defeituosa",
     "para retirada de pecas", "retirada de peças", "sucata", "chaveiro", "miniatura", "camiseta", "poster", "pôster",
     "gift card", "consórcio",
+    # aparelhos de saúde e de bebê que também se chamam "monitor"
+    "frequencia cardiaca", "frequência cardíaca", "pressao arterial", "pressão arterial", "fetal", "doppler", "oximetro",
+    "oxímetro", "glicose", "babá eletrônica", "baba eletronica", "monitor de bebe", "monitor de bebê",
     # placas de vídeo: peças e PCs montados que citam a placa no título
     "cooler para", "backplate", "riser", "extensor", "waterblock", "water block", "bracket", "fan para", "ventoinha",
     "parafuso", "pc gamer", "computador", "notebook", "desktop completo", "kit upgrade", "mini pc", "all in one",
@@ -101,6 +105,18 @@ def _words(s: str) -> str:
     return " " + " ".join(norm(s).split()) + " "
 
 
+def _too_far(qt: list[str], words: list[str]) -> bool:
+    """True se as palavras da busca (só letras, 3+ caracteres) não cabem numa janela de len+1 palavras do título."""
+    key = [t for t in dict.fromkeys(qt) if t.isalpha() and len(t) >= 3]
+    if len(key) < 2:
+        return False
+    pos = {t: [i for i, w in enumerate(words) if w == t] for t in key}
+    if any(not p for p in pos.values()):
+        return False  # termo veio por sinônimo (ex.: PlayStation 5 = PS5): sem como medir distância
+    best = min(max(c) - min(c) + 1 for c in itertools.islice(itertools.product(*pos.values()), 500))
+    return best > len(key) + 1
+
+
 def relevance(query: str, title: str, exclude: list[str] | None = None) -> tuple[bool, str]:
     """True quando o título contém todos os termos da busca (palavras inteiras) e não parece acessório/variante."""
     qt = tokens(query)
@@ -109,6 +125,11 @@ def relevance(query: str, title: str, exclude: list[str] | None = None) -> tuple
     for t in qt:
         if t not in tt:  # palavras inteiras: "16" não casa com "160"
             return False, f"sem o termo '{t}'"
+    # palavras da busca perto umas das outras: "monitor portátil" aceita "Monitor LED Portátil", mas não
+    # "Monitor Fetal Doppler Portátil" nem "Monitor de Pressão ... Portátil". Números e siglas curtas
+    # (3060, 12gb, 5) ficam livres, porque as lojas os põem em qualquer lugar do título.
+    if _too_far(qt, [w for w in norm(title).split() if not any(c.isdigit() for c in w)]):
+        return False, "termos da busca distantes no título"
     # variante diferente: busca "3060" não aceita "3060 ti" (a menos que a busca peça)
     for t in qt:
         if t.isdigit() and len(t) >= 3:

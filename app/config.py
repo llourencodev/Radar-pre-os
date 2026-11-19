@@ -59,6 +59,18 @@ SUSPECT_RATIO = _float("PRECOS_SUSPECT_RATIO", 0.25)  # abaixo de 25% = também 
 FLOOR_RATIO = _float("PRECOS_FLOOR_RATIO", 0.20)  # abaixo de 20% da referência só fica se o título casar muito bem
 NEW_HOURS = _int("PRECOS_NEW_HOURS", 24)
 
+# Modo de execução: "local" (padrão: monitoramento automático) ou "api" (servidor público de busca instantânea,
+# por exemplo no Render: sem agendador nem coleta automática, só /api/buscar e /api/saude)
+MODE = os.environ.get("PRECOS_MODE", "local").strip().lower()
+API_MODE = MODE == "api"
+# Busca instantânea (/api/buscar)
+SEARCH_TIMEOUT = _int("PRECOS_SEARCH_TIMEOUT", 30)        # segundos; lojas mais lentas ficam de fora
+SEARCH_CACHE_MIN = _int("PRECOS_SEARCH_CACHE_MIN", 10)    # cache por termo
+SEARCH_RATE_PER_MIN = _int("PRECOS_SEARCH_RATE", 10)      # buscas por minuto por IP
+SEARCH_PARALLEL = _int("PRECOS_SEARCH_PARALLEL", 2)       # buscas rodando ao mesmo tempo
+CORS_ORIGINS = [o.strip() for o in os.environ.get(
+    "PRECOS_CORS_ORIGINS", "https://llourencodev.github.io,http://localhost:8010").split(",") if o.strip()]
+
 HTTP_TIMEOUT = _int("PRECOS_HTTP_TIMEOUT", 25)
 HOST_MIN_INTERVAL = _float("PRECOS_HOST_MIN_INTERVAL", 1.5)
 USER_AGENT = os.environ.get(

@@ -45,6 +45,7 @@
       } catch { /* mantém os dados atuais */ }
       return clone(D.data.status);
     }
+    if (p === "/api/meta") return clone(d.meta);
     if (p === "/api/dashboard") return clone(d.dashboard);
     if (p === "/api/watches") return clone(d.watches);
     let m = p.match(/^\/api\/watches\/(\d+)$/);

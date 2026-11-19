@@ -3,12 +3,13 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import collector, config, coupons, db
+from . import collector, config, coupons, db, instant
 from .stores.catalog import OFF_STORES, STORES
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -18,6 +19,11 @@ _stop = threading.Event()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    if config.API_MODE:
+        # servidor público de busca instantânea (Render): sem agendador nem coleta automática
+        logging.getLogger(__name__).info("Modo api: só /api/buscar e /api/saude")
+        yield
+        return
     pruned = db.prune_all()  # some da tela o que o filtro atual não aceita
     logging.getLogger(__name__).info("Ofertas desativadas pelo filtro: %s", pruned)
     threading.Thread(target=collector.scheduler_loop, args=(_stop,), daemon=True, name="agendador").start()
@@ -26,6 +32,47 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Radar de Preços", version="1.0", lifespan=lifespan)
+
+API_ROUTES = ("/api/buscar", "/api/saude")
+
+
+@app.middleware("http")
+async def api_mode_guard(request: Request, call_next):
+    """No modo api (endereço público) só a busca instantânea e a checagem de saúde existem."""
+    if config.API_MODE and (request.url.path not in API_ROUTES or request.method not in ("GET", "HEAD", "OPTIONS")):
+        return JSONResponse({"detail": "Não encontrado"}, status_code=404)
+    return await call_next(request)
+
+
+# o site publicado (GitHub Pages) chama a busca instantânea de outro endereço
+app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS, allow_methods=["GET"], allow_headers=[],
+                   allow_credentials=False, max_age=3600)
+
+
+def client_ip(request: Request) -> str:
+    """IP de quem buscou. Atrás do proxy do Render (Cloudflare) vale o cabeçalho que o próprio proxy preenche;
+    o primeiro item do X-Forwarded-For pode ser inventado pelo cliente, então usamos o último."""
+    h = request.headers
+    ip = h.get("cf-connecting-ip") or h.get("true-client-ip")
+    if not ip and config.API_MODE and h.get("x-forwarded-for"):
+        ip = h["x-forwarded-for"].split(",")[-1].strip()
+    return ip or (request.client.host if request.client else "?")
+
+
+@app.get("/api/saude")
+def saude():
+    return {"ok": True, "mode": config.MODE}
+
+
+@app.get("/api/buscar")
+def buscar(request: Request, q: str = ""):
+    """Busca instantânea: consulta as lojas na hora (até 30 s), sem cadastrar o produto. Cache de 10 min por termo."""
+    if not instant.limiter.allow(client_ip(request)):
+        raise HTTPException(429, f"Muitas buscas seguidas. Espere um minuto (limite de {config.SEARCH_RATE_PER_MIN} por minuto).")
+    try:
+        return instant.search(q)
+    except instant.SearchError as e:
+        raise HTTPException(e.status, e.detail) from e
 
 
 def _not_found(x):
